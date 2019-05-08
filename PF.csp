@@ -1,0 +1,164 @@
+﻿#import "PAT.Lib.Queue";
+channel a 1;
+channel b 1;
+channel c 1;
+channel d 1;
+channel e 1;
+channel f 1;
+channel g 1;
+
+//命令式行为子问题
+enum{OnBut,OffBut};//路由器操作者发送的命令 d:int1,int2
+enum{OnC,OffC,Test};//控制器发送给包传送装置的命令 a:int3,int4
+enum{PCRunning,PCStopped};//
+var isOpen=false;
+//路由器操作者
+//RO=d!OnBut->d!OffBut->RO;
+RO=d!OnBut->RO[]d!OffBut->RO;
+//包传送装置
+Running =e!PCRunning{isOpen=true}->Skip;//->Stopped;
+Stopped =e!PCStopped{isOpen=false}->Skip;//->Running;  
+PC=a?X->ifa(X==OnC){Running;PC}
+		else ifa(X==OffC){Stopped;PC};
+
+//需求
+/*
+R11=d!OnBut->e!PCRunning->Skip;
+R12=d!OffBut->e!PCStopped->Skip;
+R1=R11;R1[]R12;R1;
+*/
+
+//受限域
+E11=d!OnBut->E11[]d!OffBut->E11;
+E12=a?OnC->e!PCRunning{isOpen=true}->E12
+	[]a?OffC->e!PCStopped{isOpen=false}->E12;
+E1=E11||E12;
+
+//路由器控制器1
+RC11 =a!OnC->e?PCRunning->Skip;//RC12;
+RC12 =a!OffC->e?PCStopped->Skip;//RC11;
+RC1=d?X->ifa(X==OnBut){RC11;RC1}
+		else ifa(X==OffBut){RC12;RC1};
+
+//需求式行为问题--路由子问题
+enum{sendDest,sensOnP,setPos,LSw,RSw,SwPos,sensOnSw};
+enum {bj, sh, gz, sz};//地址
+var sw[4];//开关位置，LSw或RSw
+#define N 2;
+var LR;
+enum{PkgInfo,Assoc,PDest};
+var q_p=[new Queue(),new Queue(),new Queue(),new Queue(),new Queue(),new Queue(),new Queue(),new Queue()];
+var q_sw=[new Queue(),new Queue(),new Queue(),new Queue()];//q_sw[0]是阅读工作站的队列
+
+//var q[8];
+//包和传感器 i:ID，des：地址，p:管道编号(同开关编号)，传感器编号p.1,p.2
+#alphabet E2{SetSwitchtoLeft,SetSwitchtoRight};
+
+RP1(i,des)=[isOpen==true]atomic{c!sendDest.i.des{q_sw[0].Enqueue(i)}->Skip};
+	ThroughReaderStation(i,des);
+	
+ThroughReaderStation(i,des)=atomic{c!sensOnP.i.1{q_sw[0].Dequeue();q_p[1].Enqueue(i)}->Skip};
+	ThroughPipe(i,des,1);
+			  
+ThroughPipe(i,des,p)=c?setPos.LRSw.i.p
+	->ifa(LRSw==LSw){SetSwitchLeft(i,des,p)}else{SetSwitchRight(i,des,p)};
+	ThroughSwitch(i,des,p);	
+	
+
+SetSwitchLeft(i,des,p)=SetSwitchtoLeft{if(q_sw[p].Count()==0){sw[p]=LSw;}}->Skip;
+
+
+SetSwitchRight(i,des,p)=SetSwitchtoRight{if(q_sw[p].Count()==0){sw[p]=RSw;}}->Skip;
+
+
+ThroughSwitch(i,des,p)=
+				atomic{c!sensOnSw.i.2{q_p[p].Dequeue();q_sw[p].Enqueue(i)}->Skip};
+				ifa(p==1){
+					ifa(sw[p]==LSw){ThroughPipe(i,des,2*p)}
+					else{ThroughPipe(i,des,(2*p+1))}
+				}else{
+					ifa(sw[p]==LSw){EnterBin(i,des,2*p)}
+					else{EnterBin(i,des,(2*p+1))}
+				};
+
+EnterBin(i,des,p)=atomic{f!PkgInfo.i.(p-3).des{q_sw[p/2].Dequeue()}->Skip};
+
+RP=RP1(1,gz)||RP1(2,sh);
+
+//需求
+//req2(i)=c!sendDest.i.des->f!PkgInfo.i.(p-3).des->Skip;
+//受限域
+E21(i,des)=[isOpen==true]atomic{c!sendDest.i.des{q_sw[0].Enqueue(i)}->Skip};E22(i,des,1);
+
+E22(i,des,p)=  atomic{c!sensOnP.i.p{q_sw[p/2].Dequeue();q_p[p].Enqueue(i)}->Skip};
+				c?setPos.LRSw.i.p
+				->ifa(LRSw==LSw){
+					SetSwitchtoLeft{if(q_sw[p].Count()==0){sw[p]=LSw;}}->Skip
+				}else{
+					SetSwitchtoRight{if(q_sw[p].Count()==0){sw[p]=RSw;}}->Skip
+				};
+				atomic{c!sensOnSw.i.p{q_p[p].Dequeue();q_sw[p].Enqueue(i)}->Skip};
+				ifa(p==1){
+					ifa(sw[p]==LSw){E22(i,des,2*p)}else{E22(i,des,(2*p+1))}
+				}else{
+					ifa(sw[p]==LSw){E23(i,des,2*p)}else{E23(i,des,(2*p+1))}
+				};
+
+E23(i,des,p)=  atomic{f!PkgInfo.i.(p-3).des{q_sw[p/2].Dequeue()}->Skip};
+E2=E21(1,gz)||E21(2,sh);
+	
+//路由器控制RC2
+RC21(i)=c?sendDest.i.des->RC22(i,des);
+RC22(i,des)=c?sensOn.i.p.1
+			->if(p==1&&(des==gz || des==sz)||(p==2&&des==sh)||
+				(p==3&&des==sz))
+				{RC2R(i,des,p)}
+			else{RC2L(i,des,p)}
+			;RC25(i,des);
+RC2L(i,des,p)=c!setPos.LSw.i.p->Skip;	
+RC2R(i,des,p)=c!setPos.RSw.i.p->Skip;  
+RC25(i,des)=c?SwPos.i.p
+	 		->c?sensOn.i.p.2
+	 		->ifa(p==1){RC22(i,des)}else{RC26(i,des)};
+RC26(i,des)=f?PkgInfo.i.bin.des->Skip; 	 
+RC2(i)=RC21(i);
+
+	
+//信息显示子问题--报告错误路由
+enum{show,display};
+
+//显示单元
+
+DisplayWait =b?show.i.bin.des->DisplayWait;
+DU=b?show.i.bin.des->DisplayWait;
+
+//需求
+/*
+R3=f!PkgInfo.i.bin1.des1
+		->if(bin1==1&&des1!=bj || bin1==2&&des1!=sh || 
+			bin1==3&&des1!=gz || bin1==4&&des1!=sz)
+			{g!Display.i.bin1.des1->Skip};
+*/
+//受限域
+E3=b?show.i.bin1.des1->g!display.i.bin1.des1->E3;
+
+
+//路由器控制RC3
+RC3(i)=f?PkgInfo.i.bin1.des1->
+	   ifa(bin1==1&&des1!=bj || bin1==2&&des1!=sh || 
+			bin1==3&&des1!=gz || bin1==4&&des1!=sz)
+	 		{
+	 			b!show.i.bin1.des1 ->Skip
+	 		};	 		
+D = RO || PC || RP || DU;
+RC = RC1 || (||i:{1..N}@(RC2(i);RC3(i)));
+System=RC||D;
+
+System_with_restrictions = 	RC||E1 || E2||E3;
+
+#assert System deadlockfree;
+#assert System divergencefree;
+#assert System_with_restrictions deadlockfree;
+#assert System_with_restrictions divergencefree;
+#assert System_with_restrictions refines System;
+#assert System refines System_with_restrictions;
