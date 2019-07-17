@@ -10,7 +10,7 @@ channel g 1;
 //命令式行为子问题
 enum{OnBut,OffBut};//路由器操作者发送的命令 d:int1,int2
 enum{OnC,OffC,Test};//控制器发送给包传送装置的命令 a:int3,int4
-enum{PCRunning,PCStopped};//
+enum{PCRunning,PCStopped,PCError};//
 var isOpen=false;
 //路由器操作者
 //RO=d!OnBut->d!OffBut->RO;
@@ -18,8 +18,12 @@ RO=d!OnBut->RO[]d!OffBut->RO;
 //包传送装置
 Running =e!PCRunning{isOpen=true}->Skip;//->Stopped;
 Stopped =e!PCStopped{isOpen=false}->Skip;//->Running;  
-PC=a?X->ifa(X==OnC){Running;PC}
-		else ifa(X==OffC){Stopped;PC};
+Error = e! PCError->Skip;
+PC=a?X->ifa(X==OnC){Running;PC[]Error}
+		else ifa(X==OffC){Stopped;PC[]Error};
+System1 = RC1 || RO || PC;
+#assert System1 deadlockfree;
+#assert System1 divergencefree;
 
 //需求
 /*
